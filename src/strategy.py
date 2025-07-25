@@ -20,7 +20,7 @@ class StrategyConfig:
     min_confidence: float = 0.7
     max_position_size: float = 0.3  # Max 30% in single position
     min_volume: int = 1000000  # Minimum volume for liquidity
-    max_daily_trades: int = 20
+    max_daily_trades: int = 1000  # Increased default
     profit_target: float = 0.05  # 5% profit target
     stop_loss: float = 0.02  # 2% stop loss
     momentum_threshold: float = 0.03  # 3% price movement threshold
@@ -31,6 +31,9 @@ class StrategyEngine:
     def __init__(self, market_data_engine: MarketDataEngine):
         self.market_data = market_data_engine
         self.config = StrategyConfig()
+        # Override max_daily_trades from global config
+        from .config import config
+        self.config.max_daily_trades = config.trading.max_daily_trades
         self.daily_trades = 0
         self.last_reset = datetime.now().date()
     

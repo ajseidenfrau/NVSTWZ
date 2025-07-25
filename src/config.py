@@ -14,6 +14,7 @@ class TradingConfig(BaseSettings):
     max_daily_loss: float = Field(default=0.00, env="MAX_DAILY_LOSS")
     target_daily_return: float = Field(default=0.05, env="TARGET_DAILY_RETURN")
     risk_tolerance: float = Field(default=0.02, env="RISK_TOLERANCE")
+    max_daily_trades: int = Field(default=50, env="MAX_DAILY_TRADES")
     
     # Trading hours (EST)
     market_open: str = Field(default="09:30", env="MARKET_OPEN")
