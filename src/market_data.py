@@ -1,318 +1,220 @@
 """
-Market data engine for fetching real-time market information.
+Market Data Engine for NVSTWZ investment bot.
+Simulation mode for testing without external API dependencies.
 """
 import asyncio
-import aiohttp
-import yfinance as yf
+import random
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-import pandas as pd
-from alpha_vantage.timeseries import TimeSeries
-from newsapi import NewsApiClient
-import finnhub
-
-from .config import config
+from typing import List, Optional, Dict
+from loguru import logger
 from .models import MarketData, NewsEvent, MarketSentiment
-from .utils.logger import get_logger
-
-logger = get_logger(__name__)
+from .config import config
 
 class MarketDataEngine:
-    """Engine for fetching and managing market data."""
+    """Market data engine in simulation mode for testing."""
     
     def __init__(self):
-        self.alpha_vantage = TimeSeries(key=config.api.alpha_vantage_key, output_format='pandas')
-        self.news_api = NewsApiClient(api_key=config.api.news_api_key)
-        self.finnhub_client = finnhub.Client(api_key=config.api.finnhub_key)
-        self.session = None
+        self.cache = {}
+        self.cache_duration = 60  # 1 minute cache
+        self.base_prices = {
+            'AAPL': 150.0,
+            'MSFT': 300.0,
+            'GOOGL': 2800.0,
+            'AMZN': 3300.0,
+            'TSLA': 700.0,
+            'META': 350.0,
+            'NVDA': 500.0
+        }
+        self.price_history = {symbol: [price] for symbol, price in self.base_prices.items()}
         
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession()
-        return self
+    def _simulate_price_movement(self, symbol: str) -> tuple:
+        """Simulate realistic price movement."""
+        base_price = self.base_prices[symbol]
         
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
+        # Get recent price history
+        if symbol in self.price_history and len(self.price_history[symbol]) > 0:
+            current_price = self.price_history[symbol][-1]
+        else:
+            current_price = base_price
+        
+        # Simulate price movement (random walk with some trend)
+        volatility = 0.02  # 2% daily volatility
+        trend = random.uniform(-0.01, 0.01)  # Slight trend
+        
+        # Calculate new price
+        change_pct = random.gauss(trend, volatility)
+        new_price = current_price * (1 + change_pct)
+        
+        # Ensure price doesn't go negative
+        new_price = max(new_price, base_price * 0.5)
+        
+        # Update price history
+        if symbol not in self.price_history:
+            self.price_history[symbol] = []
+        self.price_history[symbol].append(new_price)
+        
+        # Keep only last 100 prices
+        if len(self.price_history[symbol]) > 100:
+            self.price_history[symbol] = self.price_history[symbol][-100:]
+        
+        # Calculate change
+        price_change = new_price - current_price
+        price_change_pct = (price_change / current_price) * 100
+        
+        return new_price, price_change, price_change_pct
     
     async def get_real_time_price(self, symbol: str) -> Optional[MarketData]:
-        """Get real-time price data for a symbol."""
+        """Get simulated real-time price data."""
         try:
-            # Try multiple data sources for redundancy
-            data = await self._get_price_from_yfinance(symbol)
-            if not data:
-                data = await self._get_price_from_alpha_vantage(symbol)
+            # Check cache first
+            cache_key = f"price_{symbol}"
+            if cache_key in self.cache:
+                cached_data, timestamp = self.cache[cache_key]
+                if (datetime.now() - timestamp).seconds < self.cache_duration:
+                    logger.debug(f"Using cached data for {symbol}")
+                    return cached_data
             
-            return data
-        except Exception as e:
-            logger.error(f"Error fetching price for {symbol}: {e}")
-            return None
-    
-    async def _get_price_from_yfinance(self, symbol: str) -> Optional[MarketData]:
-        """Get price data from Yahoo Finance."""
-        try:
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
+            # Simulate a small delay
+            await asyncio.sleep(0.1)
             
-            # Get real-time quote
-            quote = ticker.history(period="1d", interval="1m")
-            if quote.empty:
-                return None
-                
-            latest = quote.iloc[-1]
+            logger.info(f"Fetching price for {symbol}")
             
-            return MarketData(
+            # Simulate price movement
+            current_price, price_change, price_change_pct = self._simulate_price_movement(symbol)
+            
+            # Simulate volume
+            volume = random.randint(1000000, 10000000)
+            
+            # Calculate additional required fields
+            high = current_price * (1 + random.uniform(0, 0.05))
+            low = current_price * (1 - random.uniform(0, 0.05))
+            open_price = current_price * (1 + random.uniform(-0.02, 0.02))
+            previous_close = current_price - price_change
+            
+            market_data = MarketData(
                 symbol=symbol,
-                price=float(latest['Close']),
-                volume=int(latest['Volume']),
-                high=float(latest['High']),
-                low=float(latest['Low']),
-                open=float(latest['Open']),
-                previous_close=float(info.get('previousClose', latest['Close'])),
-                change=float(latest['Close'] - info.get('previousClose', latest['Close'])),
-                change_percent=float((latest['Close'] - info.get('previousClose', latest['Close'])) / info.get('previousClose', latest['Close']) * 100),
+                price=current_price,
+                volume=volume,
+                high=high,
+                low=low,
+                open=open_price,
+                previous_close=previous_close,
+                change=price_change,
+                change_percent=price_change_pct,
                 timestamp=datetime.now(),
-                market_cap=info.get('marketCap'),
-                pe_ratio=info.get('trailingPE')
+                market_cap=current_price * volume * 0.1,  # Rough estimate
+                pe_ratio=random.uniform(15, 30)
             )
+            
+            # Cache the result
+            self.cache[cache_key] = (market_data, datetime.now())
+            
+            logger.info(f"Successfully fetched {symbol}: ${current_price:.2f} ({price_change_pct:+.2f}%)")
+            return market_data
+            
         except Exception as e:
-            logger.error(f"Error fetching from Yahoo Finance for {symbol}: {e}")
+            logger.error(f"Error in get_real_time_price for {symbol}: {e}")
             return None
     
-    async def _get_price_from_alpha_vantage(self, symbol: str) -> Optional[MarketData]:
-        """Get price data from Alpha Vantage."""
+    async def get_top_movers(self, limit: int = 3) -> List[MarketData]:
+        """Get top moving stocks."""
         try:
-            data, meta_data = self.alpha_vantage.get_quote_endpoint(symbol)
+            # Use a small list for testing
+            major_stocks = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA']
             
-            if data.empty:
-                return None
-                
-            quote = data.iloc[0]
+            results = []
             
-            return MarketData(
-                symbol=symbol,
-                price=float(quote['05. price']),
-                volume=int(quote['06. volume']),
-                high=float(quote['03. high']),
-                low=float(quote['04. low']),
-                open=float(quote['02. open']),
-                previous_close=float(quote['08. previous close']),
-                change=float(quote['09. change']),
-                change_percent=float(quote['10. change percent'].rstrip('%')),
-                timestamp=datetime.now()
-            )
-        except Exception as e:
-            logger.error(f"Error fetching from Alpha Vantage for {symbol}: {e}")
-            return None
-    
-    async def get_market_news(self, symbols: List[str] = None, hours_back: int = 24) -> List[NewsEvent]:
-        """Get market news that could impact trading."""
-        try:
-            news_events = []
-            
-            # Get general market news
-            if symbols:
-                for symbol in symbols:
-                    symbol_news = await self._get_news_for_symbol(symbol, hours_back)
-                    news_events.extend(symbol_news)
-            
-            # Get general market news
-            general_news = await self._get_general_market_news(hours_back)
-            news_events.extend(general_news)
-            
-            # Remove duplicates and sort by impact
-            unique_news = self._deduplicate_news(news_events)
-            return sorted(unique_news, key=lambda x: x.impact_score, reverse=True)
-            
-        except Exception as e:
-            logger.error(f"Error fetching market news: {e}")
-            return []
-    
-    async def _get_news_for_symbol(self, symbol: str, hours_back: int) -> List[NewsEvent]:
-        """Get news for a specific symbol."""
-        try:
-            # Use NewsAPI
-            from_date = datetime.now() - timedelta(hours=hours_back)
-            news = self.news_api.get_everything(
-                q=symbol,
-                from_param=from_date.isoformat(),
-                language='en',
-                sort_by='relevancy'
-            )
-            
-            events = []
-            for article in news.get('articles', [])[:10]:  # Limit to top 10
-                sentiment = await self._analyze_sentiment(article['title'] + " " + article['description'])
-                
-                event = NewsEvent(
-                    title=article['title'],
-                    description=article['description'],
-                    source=article['source']['name'],
-                    url=article['url'],
-                    published_at=datetime.fromisoformat(article['publishedAt'].replace('Z', '+00:00')),
-                    sentiment=sentiment,
-                    confidence=0.8,  # Placeholder
-                    symbols=[symbol],
-                    impact_score=self._calculate_impact_score(article, sentiment)
-                )
-                events.append(event)
-            
-            return events
-            
-        except Exception as e:
-            logger.error(f"Error fetching news for {symbol}: {e}")
-            return []
-    
-    async def _get_general_market_news(self, hours_back: int) -> List[NewsEvent]:
-        """Get general market news."""
-        try:
-            from_date = datetime.now() - timedelta(hours=hours_back)
-            news = self.news_api.get_everything(
-                q="stock market OR trading OR investment",
-                from_param=from_date.isoformat(),
-                language='en',
-                sort_by='relevancy'
-            )
-            
-            events = []
-            for article in news.get('articles', [])[:5]:  # Limit to top 5
-                sentiment = await self._analyze_sentiment(article['title'] + " " + article['description'])
-                
-                event = NewsEvent(
-                    title=article['title'],
-                    description=article['description'],
-                    source=article['source']['name'],
-                    url=article['url'],
-                    published_at=datetime.fromisoformat(article['publishedAt'].replace('Z', '+00:00')),
-                    sentiment=sentiment,
-                    confidence=0.7,
-                    symbols=[],
-                    impact_score=self._calculate_impact_score(article, sentiment)
-                )
-                events.append(event)
-            
-            return events
-            
-        except Exception as e:
-            logger.error(f"Error fetching general market news: {e}")
-            return []
-    
-    async def _analyze_sentiment(self, text: str) -> MarketSentiment:
-        """Analyze sentiment of news text."""
-        # Simple keyword-based sentiment analysis
-        # In production, use a proper NLP model
-        bullish_keywords = ['bullish', 'surge', 'rally', 'gain', 'positive', 'up', 'higher', 'profit']
-        bearish_keywords = ['bearish', 'drop', 'fall', 'decline', 'negative', 'down', 'lower', 'loss']
-        
-        text_lower = text.lower()
-        bullish_count = sum(1 for keyword in bullish_keywords if keyword in text_lower)
-        bearish_count = sum(1 for keyword in bearish_keywords if keyword in text_lower)
-        
-        if bullish_count > bearish_count:
-            return MarketSentiment.BULLISH
-        elif bearish_count > bullish_count:
-            return MarketSentiment.BEARISH
-        else:
-            return MarketSentiment.NEUTRAL
-    
-    def _calculate_impact_score(self, article: dict, sentiment: MarketSentiment) -> float:
-        """Calculate impact score for news article."""
-        base_score = 0.5
-        
-        # Source credibility
-        credible_sources = ['Reuters', 'Bloomberg', 'CNBC', 'MarketWatch', 'Yahoo Finance']
-        if article['source']['name'] in credible_sources:
-            base_score += 0.3
-        
-        # Sentiment impact
-        if sentiment == MarketSentiment.BULLISH:
-            base_score += 0.2
-        elif sentiment == MarketSentiment.BEARISH:
-            base_score += 0.1
-        
-        # Recency bonus
-        hours_old = (datetime.now() - datetime.fromisoformat(article['publishedAt'].replace('Z', '+00:00'))).total_seconds() / 3600
-        if hours_old < 1:
-            base_score += 0.2
-        elif hours_old < 6:
-            base_score += 0.1
-        
-        return min(base_score, 1.0)
-    
-    def _deduplicate_news(self, news_events: List[NewsEvent]) -> List[NewsEvent]:
-        """Remove duplicate news events."""
-        seen_titles = set()
-        unique_events = []
-        
-        for event in news_events:
-            if event.title not in seen_titles:
-                seen_titles.add(event.title)
-                unique_events.append(event)
-        
-        return unique_events
-    
-    async def get_top_movers(self, limit: int = 50) -> List[MarketData]:
-        """Get top movers (biggest gainers and losers)."""
-        try:
-            # Get S&P 500 symbols for analysis
-            sp500_symbols = await self._get_sp500_symbols()
-            
-            movers = []
-            for symbol in sp500_symbols[:limit]:
+            # Process all symbols
+            for symbol in major_stocks[:limit]:
                 data = await self.get_real_time_price(symbol)
-                if data and abs(data.change_percent) > 2:  # Only significant movers
-                    movers.append(data)
+                if data:
+                    results.append(data)
             
-            # Sort by absolute change percentage
-            return sorted(movers, key=lambda x: abs(x.change_percent), reverse=True)
+            # Sort by absolute price change percentage
+            results.sort(key=lambda x: abs(x.change_percent), reverse=True)
+            
+            logger.info(f"Successfully fetched {len(results)} stock prices")
+            return results
             
         except Exception as e:
             logger.error(f"Error fetching top movers: {e}")
             return []
     
-    async def _get_sp500_symbols(self) -> List[str]:
-        """Get S&P 500 symbols."""
-        try:
-            # Use a simple list for now - in production, fetch from a reliable source
-            sp500_symbols = [
-                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'BRK-B', 'JNJ', 'V',
-                'PG', 'JPM', 'UNH', 'HD', 'MA', 'DIS', 'PYPL', 'BAC', 'ADBE', 'CRM',
-                'NFLX', 'CMCSA', 'PFE', 'ABT', 'KO', 'TMO', 'AVGO', 'COST', 'DHR', 'ACN'
-            ]
-            return sp500_symbols
-        except Exception as e:
-            logger.error(f"Error fetching S&P 500 symbols: {e}")
-            return []
-    
-    async def get_market_status(self) -> Dict:
-        """Get overall market status."""
-        try:
-            # Check if market is open
-            now = datetime.now()
-            market_open = datetime.strptime(config.trading.market_open, "%H:%M").time()
-            market_close = datetime.strptime(config.trading.market_close, "%H:%M").time()
-            
-            is_market_open = market_open <= now.time() <= market_close
-            
-            return {
-                "is_market_open": is_market_open,
-                "current_time": now,
-                "market_open": market_open,
-                "market_close": market_close,
-                "next_market_open": self._get_next_market_open()
-            }
-        except Exception as e:
-            logger.error(f"Error getting market status: {e}")
-            return {"is_market_open": False}
-    
-    def _get_next_market_open(self) -> datetime:
-        """Get next market open time."""
-        now = datetime.now()
-        market_open = datetime.strptime(config.trading.market_open, "%H:%M").time()
+    async def get_market_news(self, symbols: List[str] = None, hours_back: int = 24) -> List[NewsEvent]:
+        """Get simulated market news."""
+        # Generate some simulated news events
+        news_events = []
         
-        if now.time() < market_open:
-            # Market opens today
-            return datetime.combine(now.date(), market_open)
-        else:
-            # Market opens tomorrow
-            tomorrow = now.date() + timedelta(days=1)
-            return datetime.combine(tomorrow, market_open) 
+        if symbols:
+            for symbol in symbols[:3]:  # Limit to 3 symbols
+                # Simulate news based on price movement
+                data = await self.get_real_time_price(symbol)
+                if data and abs(data.change_percent) > 1:
+                    sentiment = "bullish" if data.change_percent > 0 else "bearish"
+                    
+                    news_event = NewsEvent(
+                        title=f"{symbol} shows {'strong' if abs(data.change_percent) > 3 else 'moderate'} movement",
+                        description=f"{symbol} is trading at ${data.price:.2f} with {data.change_percent:+.2f}% change",
+                        source="Simulated News",
+                        url="",
+                        published_at=datetime.now(),
+                        sentiment=sentiment,
+                        confidence=0.7,
+                        symbols=[symbol],
+                        impact_score=min(0.9, abs(data.change_percent) / 10)
+                    )
+                    news_events.append(news_event)
+        
+        logger.info(f"Generated {len(news_events)} simulated news events")
+        return news_events
+    
+    async def get_market_sentiment(self, symbol: str) -> MarketSentiment:
+        """Get market sentiment for a symbol based on price movement."""
+        try:
+            data = await self.get_real_time_price(symbol)
+            if not data:
+                return MarketSentiment(symbol=symbol, sentiment="neutral", confidence=0.5)
+            
+            # Simple sentiment logic based on price movement
+            if data.change_percent > 2:
+                sentiment = "bullish"
+                confidence = min(0.9, abs(data.change_percent) / 10)
+            elif data.change_percent < -2:
+                sentiment = "bearish"
+                confidence = min(0.9, abs(data.change_percent) / 10)
+            else:
+                sentiment = "neutral"
+                confidence = 0.5
+            
+            return MarketSentiment(
+                symbol=symbol,
+                sentiment=sentiment,
+                confidence=confidence,
+                timestamp=datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting sentiment for {symbol}: {e}")
+            return MarketSentiment(symbol=symbol, sentiment="neutral", confidence=0.5)
+    
+    def _deduplicate_news(self, news_events: List[NewsEvent]) -> List[NewsEvent]:
+        """Remove duplicate news events."""
+        seen = set()
+        unique_news = []
+        
+        for event in news_events:
+            key = f"{event.title}_{event.timestamp}"
+            if key not in seen:
+                seen.add(key)
+                unique_news.append(event)
+        
+        return unique_news
+    
+    def clear_cache(self):
+        """Clear the cache."""
+        self.cache.clear()
+        logger.info("Market data cache cleared")
+    
+    async def close(self):
+        """Close the engine."""
+        logger.info("Market data engine closed") 

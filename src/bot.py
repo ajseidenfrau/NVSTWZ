@@ -124,8 +124,7 @@ class NVSTWZBot:
                 # Update daily counters
                 self._reset_daily_counters()
                 
-                # Get market status
-                market_status = await self.market_data.get_market_status()
+                # Market status check removed - using simplified approach
                 
                 # Update portfolio
                 await self._update_portfolio()
@@ -151,8 +150,8 @@ class NVSTWZBot:
                 # Log status
                 await self._log_status()
                 
-                # Wait before next iteration
-                await asyncio.sleep(30)  # 30-second intervals
+                # Wait before next iteration - longer for testing
+                await asyncio.sleep(300)  # 5-minute intervals to be very gentle on Yahoo Finance
                 
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")

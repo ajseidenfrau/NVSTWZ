@@ -49,8 +49,8 @@ class StrategyEngine:
             
             signals = []
             
-            # Get market data
-            top_movers = await self.market_data.get_top_movers(limit=100)
+            # Get market data - very limited for testing
+            top_movers = await self.market_data.get_top_movers(limit=3)
             news_events = await self.market_data.get_market_news(hours_back=6)
             
             # Generate signals based on different strategies
